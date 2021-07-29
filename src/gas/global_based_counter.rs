@@ -40,7 +40,7 @@ pub fn update_call_index(instructions: &mut elements::Instructions, inserted_ind
 /// The start of the block is `i32.const 1`.
 ///
 #[derive(Debug)]
-struct ControlBlock {
+pub(crate) struct ControlBlock {
     /// The lowest control stack index corresponding to a forward jump targeted by a br, br_if, or
     /// br_table instruction within this control block. The index must refer to a control block
     /// that is not a loop, meaning it is a forward jump. Given the way Wasm control flow is
@@ -65,27 +65,27 @@ struct ControlBlock {
 #[derive(Debug)]
 pub(crate) struct MeteredBlock {
     /// Index of the first instruction (aka `Opcode`) in the block.
-    start_pos: usize,
+    pub(crate) start_pos: usize,
     /// Sum of costs of all instructions until end of the block.
-    cost: u32,
+    pub(crate) cost: u32,
 }
 
 /// Counter is used to manage state during the gas metering algorithm implemented by
 /// `inject_counter`.
-struct Counter {
+pub(crate) struct Counter {
     /// A stack of control blocks. This stack grows when new control blocks are opened with
     /// `block`, `loop`, and `if` and shrinks when control blocks are closed with `end`. The first
     /// block on the stack corresponds to the function body, not to any labelled block. Therefore
     /// the actual Wasm label index associated with each control block is 1 less than its position
     /// in this stack.
-    stack: Vec<ControlBlock>,
+    pub(crate) stack: Vec<ControlBlock>,
 
     /// A list of metered blocks that have been finalized, meaning they will no longer change.
-    finalized_blocks: Vec<MeteredBlock>,
+    pub(crate) finalized_blocks: Vec<MeteredBlock>,
 }
 
 impl Counter {
-    fn new() -> Counter {
+    pub(crate) fn new() -> Counter {
         Counter {
             stack: Vec::new(),
             finalized_blocks: Vec::new(),
@@ -93,7 +93,7 @@ impl Counter {
     }
 
     /// Open a new control block. The cursor is the position of the first instruction in the block.
-    fn begin_control_block(&mut self, cursor: usize, is_loop: bool) {
+    pub(crate) fn begin_control_block(&mut self, cursor: usize, is_loop: bool) {
         let index = self.stack.len();
         self.stack.push(ControlBlock {
             lowest_forward_br_target: index,
@@ -107,7 +107,7 @@ impl Counter {
 
     /// Close the last control block. The cursor is the position of the final (pseudo-)instruction
     /// in the block.
-    fn finalize_control_block(&mut self, cursor: usize) -> Result<(), ()> {
+    pub(crate) fn finalize_control_block(&mut self, cursor: usize) -> Result<(), ()> {
         // This either finalizes the active metered block or merges its cost into the active
         // metered block in the previous control block on the stack.
         self.finalize_metered_block(cursor)?;
@@ -142,7 +142,7 @@ impl Counter {
     /// Finalize the current active metered block.
     ///
     /// Finalized blocks have final cost which will not change later.
-    fn finalize_metered_block(&mut self, cursor: usize) -> Result<(), ()> {
+    pub(crate) fn finalize_metered_block(&mut self, cursor: usize) -> Result<(), ()> {
         let closing_metered_block = {
             let control_block = self.stack.last_mut().ok_or_else(|| ())?;
             mem::replace(
@@ -180,7 +180,7 @@ impl Counter {
     /// instruction in the program. The indices are the stack positions of the target control
     /// blocks. Recall that the index is 0 for a `return` and relatively indexed from the top of
     /// the stack by the label of `br`, `br_if`, and `br_table` instructions.
-    fn branch(&mut self, cursor: usize, indices: &[usize]) -> Result<(), ()> {
+    pub(crate) fn branch(&mut self, cursor: usize, indices: &[usize]) -> Result<(), ()> {
         self.finalize_metered_block(cursor)?;
 
         // Update the lowest_forward_br_target of the current control block.
@@ -202,18 +202,18 @@ impl Counter {
     }
 
     /// Returns the stack index of the active control block. Returns None if stack is empty.
-    fn active_control_block_index(&self) -> Option<usize> {
+    pub(crate) fn active_control_block_index(&self) -> Option<usize> {
         self.stack.len().checked_sub(1)
     }
 
     /// Get a reference to the currently active metered block.
-    fn active_metered_block(&mut self) -> Result<&mut MeteredBlock, ()> {
+    pub(crate) fn active_metered_block(&mut self) -> Result<&mut MeteredBlock, ()> {
         let top_block = self.stack.last_mut().ok_or_else(|| ())?;
         Ok(&mut top_block.active_metered_block)
     }
 
     /// Increment the cost of the current block by the specified value.
-    fn increment(&mut self, val: u32) -> Result<(), ()> {
+    pub(crate) fn increment(&mut self, val: u32) -> Result<(), ()> {
         let top_block = self.active_metered_block()?;
         top_block.cost = top_block.cost.checked_add(val).ok_or_else(|| ())?;
         Ok(())
