@@ -6,6 +6,7 @@
 
 #[cfg(test)]
 mod validation;
+pub mod global_based_counter;
 
 use std::cmp::min;
 use std::mem;
@@ -13,7 +14,6 @@ use std::vec::Vec;
 
 use parity_wasm::{elements, builder};
 use rules;
-use parity_wasm::elements::{Instruction, GlobalType, ValueType, InitExpr, GlobalEntry};
 
 pub fn update_call_index(instructions: &mut elements::Instructions, inserted_index: u32) {
 	use parity_wasm::elements::Instruction::*;
@@ -223,6 +223,43 @@ impl Counter {
 	}
 }
 
+fn inject_grow_counter(instructions: &mut elements::Instructions, grow_counter_func: u32) -> usize {
+	use parity_wasm::elements::Instruction::*;
+	let mut counter = 0;
+	for instruction in instructions.elements_mut() {
+		if let GrowMemory(_) = *instruction {
+			*instruction = Call(grow_counter_func);
+			counter += 1;
+		}
+	}
+	counter
+}
+
+fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_func: u32) -> elements::Module {
+	use parity_wasm::elements::Instruction::*;
+
+	let mut b = builder::from_module(module);
+	b.push_function(
+		builder::function()
+			.signature().params().i32().build().with_return_type(Some(elements::ValueType::I32)).build()
+			.body()
+			.with_instructions(elements::Instructions::new(vec![
+				GetLocal(0),
+				GetLocal(0),
+				I32Const(rules.grow_cost() as i32),
+				I32Mul,
+				// todo: there should be strong guarantee that it does not return anything on stack?
+				Call(gas_func),
+				GrowMemory(0),
+				End,
+			]))
+			.build()
+			.build()
+	);
+
+	b.build()
+}
+
 pub(crate) fn determine_metered_blocks(
 	instructions: &elements::Instructions,
 	rules: &rules::Set,
@@ -285,9 +322,6 @@ pub(crate) fn determine_metered_blocks(
 			Return => {
 				counter.increment(instruction_cost)?;
 				counter.branch(cursor, &[0])?;
-			},
-			GrowMemory(_) => {
-				counter.increment(rules.grow_cost()+instruction_cost)?;
 			}
 			_ => {
 				// An ordinal non control flow instruction increments the cost of the current block.
@@ -303,19 +337,17 @@ pub(crate) fn determine_metered_blocks(
 pub fn inject_counter(
 	instructions: &mut elements::Instructions,
 	rules: &rules::Set,
-	gas_global: u32,
-	out_of_gas_callback: u32,
+	gas_func: u32,
 ) -> Result<(), ()> {
 	let blocks = determine_metered_blocks(instructions, rules)?;
-	insert_metering_update(instructions, blocks, gas_global, out_of_gas_callback)
+	insert_metering_calls(instructions, blocks, gas_func)
 }
 
 // Then insert metering calls into a sequence of instructions given the block locations and costs.
-fn insert_metering_update(
+fn insert_metering_calls(
 	instructions: &mut elements::Instructions,
 	blocks: Vec<MeteredBlock>,
-	gas_global: u32,
-	out_of_gas_callback: u32,
+	gas_func: u32,
 )
 	-> Result<(), ()>
 {
@@ -334,20 +366,8 @@ fn insert_metering_update(
 		// If there the next block starts at this position, inject metering instructions.
 		let used_block = if let Some(ref block) = block_iter.peek() {
 			if block.start_pos == original_pos {
-				new_instrs.extend(vec![
-					// if gas_global < block.cost: call host function out_of_gas_callback
-					GetGlobal(gas_global),
-					I32Const(block.cost as i32),
-					I32LtU,
-					If(elements::BlockType::NoResult),
-					Call(out_of_gas_callback),
-					End,
-					// gas_global -= block.cost
-					GetGlobal(gas_global),
-					I32Const(block.cost as i32),
-					I32Sub,
-					SetGlobal(gas_global),
-				]);
+				new_instrs.push(I32Const(block.cost as i32));
+				new_instrs.push(Call(gas_func));
 				true
 			} else { false }
 		} else { false };
@@ -402,23 +422,20 @@ fn insert_metering_update(
 /// The function fails if the module contains any operation forbidden by gas rule set, returning
 /// the original module as an Err.
 pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
-	-> Result<elements::Module, elements::Module>
+						  -> Result<elements::Module, elements::Module>
 {
-	// Injecting remaining gas global
-	let mut mbuilder = builder::from_module(module)
-		.with_global(GlobalEntry::new(
-		GlobalType::new(ValueType::I32, true),
-		InitExpr::new(vec![Instruction::I32Const(0), Instruction::End]),
-	));
-	// Injecting host callback when run out of gas
+	// Injecting gas counting external
+	let mut mbuilder = builder::from_module(module);
 	let import_sig = mbuilder.push_signature(
 		builder::signature()
+			.param().i32()
 			.build_sig()
 	);
+
 	mbuilder.push_import(
 		builder::import()
 			.module("env")
-			.field("out_of_gas_callback")
+			.field("gas")
 			.external().func(import_sig)
 			.build()
 	);
@@ -428,25 +445,33 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
 
 	// calculate actual function index of the imported definition
 	//    (subtract all imports that are NOT functions)
-	let out_of_gas_callback = module.import_count(elements::ImportCountType::Function) as u32 - 1;
-	let gas_global = module.global_section().unwrap().entries().len() as u32 - 1;
+
+	let gas_func = module.import_count(elements::ImportCountType::Function) as u32 - 1;
+	let total_func = module.functions_space() as u32;
+	let mut need_grow_counter = false;
 	let mut error = false;
 
+	// Updating calling addresses (all calls to function index >= `gas_func` should be incremented)
 	for section in module.sections_mut() {
 		match section {
 			&mut elements::Section::Code(ref mut code_section) => {
 				for ref mut func_body in code_section.bodies_mut() {
-					update_call_index(func_body.code_mut(), out_of_gas_callback);
-					if let Err(_) = inject_counter(func_body.code_mut(), rules, gas_global, out_of_gas_callback) {
+					update_call_index(func_body.code_mut(), gas_func);
+					if let Err(_) = inject_counter(func_body.code_mut(), rules, gas_func) {
 						error = true;
 						break;
+					}
+					if rules.grow_cost() > 0 {
+						if inject_grow_counter(func_body.code_mut(), total_func) > 0 {
+							need_grow_counter = true;
+						}
 					}
 				}
 			},
 			&mut elements::Section::Export(ref mut export_section) => {
 				for ref mut export in export_section.entries_mut() {
 					if let &mut elements::Internal::Function(ref mut func_index) = export.internal_mut() {
-						if *func_index >= out_of_gas_callback { *func_index += 1}
+						if *func_index >= gas_func { *func_index += 1}
 					}
 				}
 			},
@@ -456,12 +481,12 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
 				for ref mut segment in elements_section.entries_mut() {
 					// update all indirect call addresses initial values
 					for func_index in segment.members_mut() {
-						if *func_index >= out_of_gas_callback { *func_index += 1}
+						if *func_index >= gas_func { *func_index += 1}
 					}
 				}
 			},
 			&mut elements::Section::Start(ref mut start_idx) => {
-				if *start_idx >= out_of_gas_callback { *start_idx += 1}
+				if *start_idx >= gas_func { *start_idx += 1}
 			},
 			_ => { }
 		}
@@ -469,17 +494,7 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
 
 	if error { return Err(module); }
 
- 	Ok(module)
-}
-
-pub fn set_total_gas(module: elements::Module, total_gas: i32) -> Result<elements::Module, ()> {
-	let mut module = module.clone();
-	let gas_global = module.global_section().ok_or(())?.entries().len() as usize - 1;
-	module.global_section_mut().ok_or(())?.entries_mut()[gas_global] = GlobalEntry::new(
-		GlobalType::new(ValueType::I32, true),
-		InitExpr::new(vec![Instruction::I32Const(total_gas), Instruction::End]),
-	);
-	Ok(module)
+	if need_grow_counter { Ok(add_grow_counter(module, rules, gas_func)) } else { Ok(module) }
 }
 
 #[cfg(test)]
@@ -493,7 +508,7 @@ mod tests {
 	use rules;
 
 	pub fn get_function_body(module: &elements::Module, index: usize)
-		-> Option<&[elements::Instruction]>
+							 -> Option<&[elements::Instruction]>
 	{
 		module.code_section()
 			.and_then(|code_section| code_section.bodies().get(index))
@@ -504,20 +519,20 @@ mod tests {
 	fn simple_grow() {
 		let module = builder::module()
 			.global()
-				.value_type().i32()
-				.build()
+			.value_type().i32()
+			.build()
 			.function()
-				.signature().param().i32().build()
-				.body()
-					.with_instructions(elements::Instructions::new(
-						vec![
-							GetGlobal(0),
-							GrowMemory(0),
-							End
-						]
-					))
-					.build()
-				.build()
+			.signature().param().i32().build()
+			.body()
+			.with_instructions(elements::Instructions::new(
+				vec![
+					GetGlobal(0),
+					GrowMemory(0),
+					End
+				]
+			))
+			.build()
+			.build()
 			.build();
 
 		let injected_module = inject_gas_counter(module, &rules::Set::default().with_grow_cost(10000)).unwrap();
@@ -525,19 +540,23 @@ mod tests {
 		assert_eq!(
 			get_function_body(&injected_module, 0).unwrap(),
 			&vec![
-				GetGlobal(1),
-				I32Const(10002),
-				I32LtU,
-				If(elements::BlockType::NoResult),
+				I32Const(2),
 				Call(0),
-				End,
-				GetGlobal(1),
-				I32Const(10002),
-				I32Sub,
-				SetGlobal(1),
 				GetGlobal(0),
-				GrowMemory(0),
+				Call(2),
 				End
+			][..]
+		);
+		assert_eq!(
+			get_function_body(&injected_module, 1).unwrap(),
+			&vec![
+				GetLocal(0),
+				GetLocal(0),
+				I32Const(10000),
+				I32Mul,
+				Call(0),
+				GrowMemory(0),
+				End,
 			][..]
 		);
 
@@ -549,20 +568,20 @@ mod tests {
 	fn grow_no_gas_no_track() {
 		let module = builder::module()
 			.global()
-				.value_type().i32()
-				.build()
+			.value_type().i32()
+			.build()
 			.function()
-				.signature().param().i32().build()
-				.body()
-					.with_instructions(elements::Instructions::new(
-						vec![
-							GetGlobal(0),
-							GrowMemory(0),
-							End
-						]
-					))
-					.build()
-				.build()
+			.signature().param().i32().build()
+			.body()
+			.with_instructions(elements::Instructions::new(
+				vec![
+					GetGlobal(0),
+					GrowMemory(0),
+					End
+				]
+			))
+			.build()
+			.build()
 			.build();
 
 		let injected_module = inject_gas_counter(module, &rules::Set::default()).unwrap();
@@ -570,16 +589,8 @@ mod tests {
 		assert_eq!(
 			get_function_body(&injected_module, 0).unwrap(),
 			&vec![
-				GetGlobal(1),
 				I32Const(2),
-				I32LtU,
-				If(elements::BlockType::NoResult),
 				Call(0),
-				End,
-				GetGlobal(1),
-				I32Const(2),
-				I32Sub,
-				SetGlobal(1),
 				GetGlobal(0),
 				GrowMemory(0),
 				End
@@ -596,32 +607,32 @@ mod tests {
 	fn call_index() {
 		let module = builder::module()
 			.global()
-				.value_type().i32()
-				.build()
+			.value_type().i32()
+			.build()
 			.function()
-				.signature().param().i32().build()
-				.body().build()
-				.build()
+			.signature().param().i32().build()
+			.body().build()
+			.build()
 			.function()
-				.signature().param().i32().build()
-				.body()
-					.with_instructions(elements::Instructions::new(
-						vec![
-							Call(0),
-							If(elements::BlockType::NoResult),
-								Call(0),
-								Call(0),
-								Call(0),
-							Else,
-								Call(0),
-								Call(0),
-							End,
-							Call(0),
-							End
-						]
-					))
-					.build()
-				.build()
+			.signature().param().i32().build()
+			.body()
+			.with_instructions(elements::Instructions::new(
+				vec![
+					Call(0),
+					If(elements::BlockType::NoResult),
+					Call(0),
+					Call(0),
+					Call(0),
+					Else,
+					Call(0),
+					Call(0),
+					End,
+					Call(0),
+					End
+				]
+			))
+			.build()
+			.build()
 			.build();
 
 		let injected_module = inject_gas_counter(module, &Default::default()).unwrap();
@@ -629,44 +640,20 @@ mod tests {
 		assert_eq!(
 			get_function_body(&injected_module, 1).unwrap(),
 			&vec![
-				GetGlobal(1),
 				I32Const(3),
-				I32LtU,
-				If(elements::BlockType::NoResult),
 				Call(0),
-				End,
-				GetGlobal(1),
-				I32Const(3),
-				I32Sub,
-				SetGlobal(1),
 				Call(1),
 				If(elements::BlockType::NoResult),
-					GetGlobal(1),
-					I32Const(3),
-					I32LtU,
-					If(elements::BlockType::NoResult),
-						Call(0),
-					End,
-					GetGlobal(1),
-					I32Const(3),
-					I32Sub,
-					SetGlobal(1),
-					Call(1),
-					Call(1),
-					Call(1),
+				I32Const(3),
+				Call(0),
+				Call(1),
+				Call(1),
+				Call(1),
 				Else,
-					GetGlobal(1),
-					I32Const(2),
-					I32LtU,
-					If(elements::BlockType::NoResult),
-						Call(0),
-					End,
-					GetGlobal(1),
-					I32Const(2),
-					I32Sub,
-					SetGlobal(1),
-					Call(1),
-					Call(1),
+				I32Const(2),
+				Call(0),
+				Call(1),
+				Call(1),
 				End,
 				Call(1),
 				End
@@ -678,19 +665,19 @@ mod tests {
 	fn forbidden() {
 		let module = builder::module()
 			.global()
-				.value_type().i32()
-				.build()
+			.value_type().i32()
+			.build()
 			.function()
-				.signature().param().i32().build()
-				.body()
-					.with_instructions(elements::Instructions::new(
-						vec![
-							F32Const(555555),
-							End
-						]
-					))
-					.build()
-				.build()
+			.signature().param().i32().build()
+			.body()
+			.with_instructions(elements::Instructions::new(
+				vec![
+					F32Const(555555),
+					End
+				]
+			))
+			.build()
+			.build()
 			.build();
 
 		let rules = rules::Set::default().with_forbidden_floats();
@@ -723,9 +710,7 @@ mod tests {
 					.expect("injected module must have a function body");
 				let expected_func_body = get_function_body(&expected_module, 0)
 					.expect("post-module must have a function body");
-						let binary = serialize(injected_module.clone()).expect("serialization failed");
 
-		println!("=== {}", self::wabt::wasm2wat(&binary).unwrap());
 				assert_eq!(actual_func_body, expected_func_body);
 			}
 		}
@@ -741,16 +726,7 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 1
-				i32.lt_u
-				if
-				  call 0
-				end
-				get_global 0
-				i32.const 1
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 1))
 				(get_global 0)))
 		"#
 	}
@@ -770,16 +746,7 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 6
-				i32.lt_u
-				if
-				  call 0
-				end
-				get_global 0
-				i32.const 6
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 6))
 				(get_global 0)
 				(block
 					(get_global 0)
@@ -808,43 +775,16 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 3
-				i32.lt_u
-				if
-				  call 0
-				end
-				get_global 0
-				i32.const 3
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 3))
 				(get_global 0)
 				(if
 					(then
-						get_global 0
-						i32.const 3
-					    i32.lt_u
-				        if
-							call 0
-						end
-						get_global 0
-						i32.const 3
-					  	i32.sub
-					 	set_global 0
+						(call 0 (i32.const 3))
 						(get_global 0)
 						(get_global 0)
 						(get_global 0))
 					(else
-						get_global 0
-						i32.const 2
-						i32.lt_u
-						if  ;; label = @2
-							call 0
-						end
-						get_global 0
-						i32.const 2
-						i32.sub
-						set_global 0
+						(call 0 (i32.const 2))
 						(get_global 0)
 						(get_global 0)))
 				(get_global 0)))
@@ -868,31 +808,13 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 6
-				i32.lt_u
-				if  ;; label = @1
-				  call 0
-				end
-				get_global 0
-				i32.const 6
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 6))
 				(get_global 0)
 				(block
 					(get_global 0)
 					(drop)
 					(br 0)
-					get_global 0
-					i32.const 2
-					i32.lt_u
-					if  ;; label = @2
-					call 0
-					end
-					get_global 0
-					i32.const 2
-					i32.sub
-					set_global 0
+					(call 0 (i32.const 2))
 					(get_global 0)
 					(drop))
 				(get_global 0)))
@@ -920,45 +842,18 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 5
-				i32.lt_u
-				if  ;; label = @1
-				  call 0
-				end
-				get_global 0
-				i32.const 5
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 5))
 				(get_global 0)
 				(block
 					(get_global 0)
 					(if
 						(then
-							get_global 0
-							i32.const 4
-							i32.lt_u
-							if  ;; label = @3
-							  call 0
-							end
-							get_global 0
-							i32.const 4
-							i32.sub
-							set_global 0
+							(call 0 (i32.const 4))
 							(get_global 0)
 							(get_global 0)
 							(drop)
 							(br_if 1)))
-					get_global 0
-					i32.const 2
-					i32.lt_u
-					if  ;; label = @2
-					call 0
-					end
-					get_global 0
-					i32.const 2
-					i32.sub
-					set_global 0
+					(call 0 (i32.const 2))
 					(get_global 0)
 					(drop))
 				(get_global 0)))
@@ -989,54 +884,18 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 3
-				i32.lt_u
-				if  ;; label = @1
-				  call 0
-				end
-				get_global 0
-				i32.const 3
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 3))
 				(get_global 0)
 				(loop
-					get_global 0
-					i32.const 4
-					i32.lt_u
-					if  ;; label = @1
-					  call 0
-					end
-					get_global 0
-					i32.const 4
-					i32.sub
-					set_global 0
+					(call 0 (i32.const 4))
 					(get_global 0)
 					(if
 						(then
-							get_global 0
-							i32.const 2
-							i32.lt_u
-							if  ;; label = @3
-							  call 0
-							end
-							get_global 0
-							i32.const 2
-							i32.sub
-							set_global 0
+							(call 0 (i32.const 2))
 							(get_global 0)
 							(br_if 0))
 						(else
-							get_global 0
-							i32.const 4
-							i32.lt_u
-							if  ;; label = @3
-							  call 0
-							end
-							get_global 0
-							i32.const 4
-							i32.sub
-							set_global 0
+							(call 0 (i32.const 4))
 							(get_global 0)
 							(get_global 0)
 							(drop)
@@ -1061,40 +920,13 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 2
-				i32.lt_u
-				if
-				  call 0
-				end
-				get_global 0
-				i32.const 2
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 2))
 				(get_global 0)
 				(if
 					(then
-						get_global 0
-						i32.const 1
-						i32.lt_u
-						if  ;; label = @1
-						  call 0
-						end
-						get_global 0
-						i32.const 1
-						i32.sub
-						set_global 0
+						(call 0 (i32.const 1))
 						(return)))
-				get_global 0
-				i32.const 1
-				i32.lt_u
-				if  ;; label = @1
-				  call 0
-				end
-				get_global 0
-				i32.const 1
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 1))
 				(get_global 0)))
 		"#
 	}
@@ -1117,54 +949,18 @@ mod tests {
 		expected = r#"
 		(module
 			(func (result i32)
-				get_global 0
-				i32.const 5
-				i32.lt_u
-				if  ;; label = @1
-				  call 0
-				end
-				get_global 0
-				i32.const 5
-				i32.sub
-				set_global 0
+				(call 0 (i32.const 5))
 				(get_global 0)
 				(block
 					(get_global 0)
 					(if
 						(then
-							get_global 0
-							i32.const 1
-							i32.lt_u
-							if  ;; label = @3
-							  call 0
-							end
-							get_global 0
-							i32.const 1
-							i32.sub
-							set_global 0
+							(call 0 (i32.const 1))
 							(br 1))
 						(else
-							get_global 0
-							i32.const 1
-							i32.lt_u
-							if  ;; label = @3
-							  call 0
-							end
-							get_global 0
-							i32.const 1
-							i32.sub
-							set_global 0
+							(call 0 (i32.const 1))
 							(br 0)))
-					get_global 0
-					i32.const 2
-					i32.lt_u
-					if  ;; label = @2
-					call 0
-					end
-					get_global 0
-					i32.const 2
-					i32.sub
-					set_global 0
+					(call 0 (i32.const 2))
 					(get_global 0)
 					(drop))
 				(get_global 0)))
