@@ -15,19 +15,7 @@ use parity_wasm::{elements, builder};
 use rules;
 
 pub use self::global_based_counter::update_call_index;
-use self::global_based_counter::{MeteredBlock, Counter};
-
-fn inject_grow_counter(instructions: &mut elements::Instructions, grow_counter_func: u32) -> usize {
-	use parity_wasm::elements::Instruction::*;
-	let mut counter = 0;
-	for instruction in instructions.elements_mut() {
-		if let GrowMemory(_) = *instruction {
-			*instruction = Call(grow_counter_func);
-			counter += 1;
-		}
-	}
-	counter
-}
+use self::global_based_counter::{MeteredBlock, determine_metered_blocks, inject_grow_counter};
 
 fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_func: u32) -> elements::Module {
 	use parity_wasm::elements::Instruction::*;
@@ -52,80 +40,6 @@ fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_func: u32)
 	);
 
 	b.build()
-}
-
-pub(crate) fn determine_metered_blocks(
-	instructions: &elements::Instructions,
-	rules: &rules::Set,
-) -> Result<Vec<MeteredBlock>, ()> {
-	use parity_wasm::elements::Instruction::*;
-
-	let mut counter = Counter::new();
-
-	// Begin an implicit function (i.e. `func...end`) block.
-	counter.begin_control_block(0, false);
-
-	for cursor in 0..instructions.elements().len() {
-		let instruction = &instructions.elements()[cursor];
-		let instruction_cost = rules.process(instruction)?;
-		match *instruction {
-			Block(_) => {
-				counter.increment(instruction_cost)?;
-
-				// Begin new block. The cost of the following opcodes until `end` or `else` will
-				// be included into this block. The start position is set to that of the previous
-				// active metered block to signal that they should be merged in order to reduce
-				// unnecessary metering instructions.
-				let top_block_start_pos = counter.active_metered_block()?.start_pos;
-				counter.begin_control_block(top_block_start_pos, false);
-			}
-			If(_) => {
-				counter.increment(instruction_cost)?;
-				counter.begin_control_block(cursor + 1, false);
-			}
-			Loop(_) => {
-				counter.increment(instruction_cost)?;
-				counter.begin_control_block(cursor + 1, true);
-			}
-			End => {
-				counter.finalize_control_block(cursor)?;
-			},
-			Else => {
-				counter.finalize_metered_block(cursor)?;
-			}
-			Br(label) | BrIf(label) => {
-				counter.increment(instruction_cost)?;
-
-				// Label is a relative index into the control stack.
-				let active_index = counter.active_control_block_index().ok_or_else(|| ())?;
-				let target_index = active_index.checked_sub(label as usize).ok_or_else(|| ())?;
-				counter.branch(cursor, &[target_index])?;
-			}
-			BrTable(ref br_table_data) => {
-				counter.increment(instruction_cost)?;
-
-				let active_index = counter.active_control_block_index().ok_or_else(|| ())?;
-				let target_indices = [br_table_data.default]
-					.iter()
-					.chain(br_table_data.table.iter())
-					.map(|label| active_index.checked_sub(*label as usize))
-					.collect::<Option<Vec<_>>>()
-					.ok_or_else(|| ())?;
-				counter.branch(cursor, &target_indices)?;
-			}
-			Return => {
-				counter.increment(instruction_cost)?;
-				counter.branch(cursor, &[0])?;
-			}
-			_ => {
-				// An ordinal non control flow instruction increments the cost of the current block.
-				counter.increment(instruction_cost)?;
-			}
-		}
-	}
-
-	counter.finalized_blocks.sort_unstable_by_key(|block| block.start_pos);
-	Ok(counter.finalized_blocks)
 }
 
 pub fn inject_counter(

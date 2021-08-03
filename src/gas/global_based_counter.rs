@@ -72,16 +72,16 @@ pub(crate) struct MeteredBlock {
 
 /// Counter is used to manage state during the gas metering algorithm implemented by
 /// `inject_counter`.
-pub(crate) struct Counter {
+struct Counter {
     /// A stack of control blocks. This stack grows when new control blocks are opened with
     /// `block`, `loop`, and `if` and shrinks when control blocks are closed with `end`. The first
     /// block on the stack corresponds to the function body, not to any labelled block. Therefore
     /// the actual Wasm label index associated with each control block is 1 less than its position
     /// in this stack.
-    pub(crate) stack: Vec<ControlBlock>,
+    stack: Vec<ControlBlock>,
 
     /// A list of metered blocks that have been finalized, meaning they will no longer change.
-    pub(crate) finalized_blocks: Vec<MeteredBlock>,
+    finalized_blocks: Vec<MeteredBlock>,
 }
 
 impl Counter {
@@ -283,9 +283,6 @@ pub(crate) fn determine_metered_blocks(
                 counter.increment(instruction_cost)?;
                 counter.branch(cursor, &[0])?;
             },
-            GrowMemory(_) => {
-                counter.increment(rules.grow_cost()+instruction_cost)?;
-            }
             _ => {
                 // An ordinal non control flow instruction increments the cost of the current block.
                 counter.increment(instruction_cost)?;
@@ -367,10 +364,9 @@ fn insert_metering_update(
 /// Transforms a given module into one that charges gas for code to be executed by proxy of an
 /// imported gas metering function.
 ///
-/// The output module imports a function "gas" from the module "env" with type signature
-/// [i32] -> []. The argument is the amount of gas required to continue execution. The external
-/// function is meant to keep track of the total amount of gas used and trap or otherwise halt
-/// execution of the runtime if the gas usage exceeds some allowed limit.
+/// The output module imports a function `out_of_gas_callback` from the module "env" with type
+/// signature [] -> []. The external function is meant to return a customized error when run out
+/// of gas. The output module also injects a global means amount of gas remaining.
 ///
 /// The body of each function is divided into metered blocks, and the calls to charge gas are
 /// inserted at the beginning of every such block of code. A metered block is defined so that,
@@ -389,6 +385,11 @@ fn insert_metering_update(
 /// a call to charge gas for the additional pages requested. This cannot be done as part of the
 /// block level gas charges as the gas cost is not static and depends on the stack argument to
 /// `memory.grow`.
+///
+/// Remaining amount of gas is set in global. It can be set by set_total_gas, or, at runtime,
+/// set the last global. At every metered block or `memory.grow`, calculated amount of gas is
+/// deducted from this global. If the global is insufficient, then `out_of_gas_callback` will be
+/// called, which should be implemented in host to return customized run out of gas kind of error.
 ///
 /// The above transformations are performed for every function body defined in the module. This
 /// function also rewrites all function indices references by code, table elements, etc., since
@@ -427,6 +428,8 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
     //    (subtract all imports that are NOT functions)
     let out_of_gas_callback = module.import_count(elements::ImportCountType::Function) as u32 - 1;
     let gas_global = module.global_section().unwrap().entries().len() as u32 - 1;
+    let total_func = module.functions_space() as u32;
+    let mut need_grow_counter = false;
     let mut error = false;
 
     for section in module.sections_mut() {
@@ -437,6 +440,11 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
                     if let Err(_) = inject_counter(func_body.code_mut(), rules, gas_global, out_of_gas_callback) {
                         error = true;
                         break;
+                    }
+                    if rules.grow_cost() > 0 {
+                        if inject_grow_counter(func_body.code_mut(), total_func) > 0 {
+                            need_grow_counter = true;
+                        }
                     }
                 }
             },
@@ -466,7 +474,59 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
 
     if error { return Err(module); }
 
-    Ok(module)
+    if need_grow_counter { Ok(add_grow_counter(module, rules, gas_global, out_of_gas_callback)) } else { Ok(module) }
+}
+
+pub(crate) fn inject_grow_counter(instructions: &mut elements::Instructions, grow_counter_func: u32) -> usize {
+    use parity_wasm::elements::Instruction::*;
+    let mut counter = 0;
+    for instruction in instructions.elements_mut() {
+        if let GrowMemory(_) = *instruction {
+            *instruction = Call(grow_counter_func);
+            counter += 1;
+        }
+    }
+    counter
+}
+
+fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_global: u32, out_of_gas_callback: u32) -> elements::Module {
+    use parity_wasm::elements::Instruction::*;
+
+    let mut b = builder::from_module(module);
+    b.push_function(
+        builder::function()
+            .signature().params().i32().build().with_return_type(Some(elements::ValueType::I32)).build()
+            .body()
+            .with_instructions(elements::Instructions::new(vec![
+                // Leave a `delta` on stack for GrowMemory
+                GetLocal(0),
+                // if gas_global < total_grow_cost: call host function out_of_gas_callback
+                GetGlobal(gas_global),
+                // total_grow_cost = delta * grow_cost
+                GetLocal(0),
+                I32Const(rules.grow_cost() as i32),
+                I32Mul,
+                I32LtU,
+                If(elements::BlockType::NoResult),
+                Call(out_of_gas_callback),
+                End,
+                // gas_global -= total_grow_cost
+                GetGlobal(gas_global),
+                // total_grow_cost = delta * grow_cost
+                GetLocal(0),
+                I32Const(rules.grow_cost() as i32),
+                I32Mul,
+                I32Sub,
+                SetGlobal(gas_global),
+                // todo: there should be strong guarantee that it does not return anything on stack?
+                GrowMemory(0),
+                End,
+            ]))
+            .build()
+            .build()
+    );
+
+    b.build()
 }
 
 pub fn set_total_gas(module: elements::Module, total_gas: i32) -> Result<elements::Module, ()> {
@@ -523,16 +583,39 @@ mod tests {
             get_function_body(&injected_module, 0).unwrap(),
             &vec![
                 GetGlobal(1),
-                I32Const(10002),
+                I32Const(2),
                 I32LtU,
                 If(elements::BlockType::NoResult),
                 Call(0),
                 End,
                 GetGlobal(1),
-                I32Const(10002),
+                I32Const(2),
                 I32Sub,
                 SetGlobal(1),
                 GetGlobal(0),
+                Call(2),
+                End
+            ][..]
+        );
+
+        assert_eq!(
+            get_function_body(&injected_module, 1).unwrap(),
+            &vec![
+                GetLocal(0),
+                GetGlobal(1),
+                GetLocal(0),
+                I32Const(10000),
+                I32Mul,
+                I32LtU,
+                If(elements::BlockType::NoResult),
+                Call(0),
+                End,
+                GetGlobal(1),
+                GetLocal(0),
+                I32Const(10000),
+                I32Mul,
+                I32Sub,
+                SetGlobal(1),
                 GrowMemory(0),
                 End
             ][..]
