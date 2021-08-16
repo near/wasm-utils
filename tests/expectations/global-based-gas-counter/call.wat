@@ -33,4 +33,5 @@
     local.get 0
     local.get 1
     i32.add)
-  (global (;0;) (mut i32) (i32.const 0)))
+  (global (;0;) (mut i32) (i32.const 0))
+  (export "remaining_gas" (global 0)))

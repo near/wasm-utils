@@ -10,7 +10,7 @@ use std::vec::Vec;
 
 use parity_wasm::{elements, builder};
 use rules;
-use parity_wasm::elements::{Instruction, GlobalType, ValueType, InitExpr, GlobalEntry};
+use parity_wasm::elements::{Instruction, GlobalType, ValueType, InitExpr, GlobalEntry, Internal};
 
 pub fn update_call_index(instructions: &mut elements::Instructions, inserted_index: u32) {
     use parity_wasm::elements::Instruction::*;
@@ -402,6 +402,7 @@ fn insert_metering_update(
 pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
                           -> Result<elements::Module, elements::Module>
 {
+    let gas_global = module.global_section().map(|g| g.entries().len() as u32).unwrap_or(0);
     // Injecting remaining gas global
     let mut mbuilder = builder::from_module(module)
         .with_global(GlobalEntry::new(
@@ -418,6 +419,12 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
             .module("env")
             .field("out_of_gas_callback")
             .external().func(import_sig)
+            .build()
+    );
+    mbuilder.push_export(
+        builder::export()
+            .field("remaining_gas")
+            .with_internal(Internal::Global(gas_global))
             .build()
     );
 

@@ -42,4 +42,5 @@
       local.get 0
       i32.popcnt
     end)
-  (global (;0;) (mut i32) (i32.const 0)))
+  (global (;0;) (mut i32) (i32.const 0))
+  (export "remaining_gas" (global 0)))

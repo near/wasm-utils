@@ -22,5 +22,6 @@
   (func (;3;) (type 1))
   (global (;0;) (mut i32) (i32.const 0))
   (export "call" (func 3))
+  (export "remaining_gas" (global 0))
   (start 2)
   (data (;0;) (i32.const 8) "\01\02\03\04"))

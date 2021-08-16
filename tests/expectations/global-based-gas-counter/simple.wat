@@ -53,4 +53,5 @@
     block  ;; label = @1
     end)
   (global (;0;) (mut i32) (i32.const 0))
-  (export "simple" (func 1)))
+  (export "simple" (func 1))
+  (export "remaining_gas" (global 0)))
