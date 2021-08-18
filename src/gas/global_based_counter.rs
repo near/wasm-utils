@@ -511,6 +511,7 @@ fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_global: u3
                 GetGlobal(gas_global),
                 // total_grow_cost = delta * grow_cost
                 GetLocal(0),
+                I64ExtendUI32,
                 I64Const(rules.grow_cost() as i64),
                 I64Mul,
                 I64LtU,
@@ -521,6 +522,7 @@ fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_global: u3
                 GetGlobal(gas_global),
                 // total_grow_cost = delta * grow_cost
                 GetLocal(0),
+                I64ExtendUI32,
                 I64Const(rules.grow_cost() as i64),
                 I64Mul,
                 I64Sub,
@@ -611,6 +613,7 @@ mod tests {
                 GetLocal(0),
                 GetGlobal(1),
                 GetLocal(0),
+                I64ExtendUI32,
                 I64Const(10000),
                 I64Mul,
                 I64LtU,
@@ -619,6 +622,7 @@ mod tests {
                 End,
                 GetGlobal(1),
                 GetLocal(0),
+                I64ExtendUI32,
                 I64Const(10000),
                 I64Mul,
                 I64Sub,
