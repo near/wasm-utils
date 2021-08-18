@@ -5,14 +5,14 @@
   (func (;1;) (type 0) (result i32)
     (local i32 i32)
     global.get 0
-    i32.const 13
-    i32.lt_u
+    i64.const 13
+    i64.lt_u
     if  ;; label = @1
       call 0
     end
     global.get 0
-    i32.const 13
-    i32.sub
+    i64.const 13
+    i64.sub
     global.set 0
     block  ;; label = @1
       i32.const 0
@@ -27,14 +27,14 @@
       i32.const 1
       br_if 0 (;@1;)
       global.get 0
-      i32.const 5
-      i32.lt_u
+      i64.const 5
+      i64.lt_u
       if  ;; label = @2
         call 0
       end
       global.get 0
-      i32.const 5
-      i32.sub
+      i64.const 5
+      i64.sub
       global.set 0
       local.get 0
       local.get 1
@@ -43,5 +43,5 @@
       local.set 1
     end
     local.get 1)
-  (global (;0;) (mut i32) (i32.const 0))
+  (global (;0;) (mut i64) (i64.const 0))
   (export "remaining_gas" (global 0)))

@@ -6,21 +6,21 @@
   (import "env" "out_of_gas_callback" (func (;1;) (type 1)))
   (func (;2;) (type 1)
     global.get 0
-    i32.const 4
-    i32.lt_u
+    i64.const 4
+    i64.lt_u
     if  ;; label = @1
       call 1
     end
     global.get 0
-    i32.const 4
-    i32.sub
+    i64.const 4
+    i64.sub
     global.set 0
     i32.const 8
     i32.const 4
     call 0
     unreachable)
   (func (;3;) (type 1))
-  (global (;0;) (mut i32) (i32.const 0))
+  (global (;0;) (mut i64) (i64.const 0))
   (export "call" (func 3))
   (export "remaining_gas" (global 0))
   (start 2)

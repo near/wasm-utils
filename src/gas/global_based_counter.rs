@@ -331,15 +331,15 @@ fn insert_metering_update(
                 new_instrs.extend(vec![
                     // if gas_global < block.cost: call host function out_of_gas_callback
                     GetGlobal(gas_global),
-                    I32Const(block.cost as i32),
-                    I32LtU,
+                    I64Const(block.cost as i64),
+                    I64LtU,
                     If(elements::BlockType::NoResult),
                     Call(out_of_gas_callback),
                     End,
                     // gas_global -= block.cost
                     GetGlobal(gas_global),
-                    I32Const(block.cost as i32),
-                    I32Sub,
+                    I64Const(block.cost as i64),
+                    I64Sub,
                     SetGlobal(gas_global),
                 ]);
                 true
@@ -406,8 +406,8 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
     // Injecting remaining gas global
     let mut mbuilder = builder::from_module(module)
         .with_global(GlobalEntry::new(
-            GlobalType::new(ValueType::I32, true),
-            InitExpr::new(vec![Instruction::I32Const(0), Instruction::End]),
+            GlobalType::new(ValueType::I64, true),
+            InitExpr::new(vec![Instruction::I64Const(0), Instruction::End]),
         ));
     // Injecting host callback when run out of gas
     let import_sig = mbuilder.push_signature(
@@ -511,9 +511,9 @@ fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_global: u3
                 GetGlobal(gas_global),
                 // total_grow_cost = delta * grow_cost
                 GetLocal(0),
-                I32Const(rules.grow_cost() as i32),
-                I32Mul,
-                I32LtU,
+                I64Const(rules.grow_cost() as i64),
+                I64Mul,
+                I64LtU,
                 If(elements::BlockType::NoResult),
                 Call(out_of_gas_callback),
                 End,
@@ -521,9 +521,9 @@ fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_global: u3
                 GetGlobal(gas_global),
                 // total_grow_cost = delta * grow_cost
                 GetLocal(0),
-                I32Const(rules.grow_cost() as i32),
-                I32Mul,
-                I32Sub,
+                I64Const(rules.grow_cost() as i64),
+                I64Mul,
+                I64Sub,
                 SetGlobal(gas_global),
                 // todo: there should be strong guarantee that it does not return anything on stack?
                 GrowMemory(0),
@@ -536,12 +536,12 @@ fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_global: u3
     b.build()
 }
 
-pub fn set_total_gas(module: elements::Module, total_gas: i32) -> Result<elements::Module, ()> {
+pub fn set_total_gas(module: elements::Module, total_gas: i64) -> Result<elements::Module, ()> {
     let mut module = module.clone();
     let gas_global = module.global_section().ok_or(())?.entries().len() as usize - 1;
     module.global_section_mut().ok_or(())?.entries_mut()[gas_global] = GlobalEntry::new(
-        GlobalType::new(ValueType::I32, true),
-        InitExpr::new(vec![Instruction::I32Const(total_gas), Instruction::End]),
+        GlobalType::new(ValueType::I64, true),
+        InitExpr::new(vec![Instruction::I64Const(total_gas), Instruction::End]),
     );
     Ok(module)
 }
@@ -590,14 +590,14 @@ mod tests {
             get_function_body(&injected_module, 0).unwrap(),
             &vec![
                 GetGlobal(1),
-                I32Const(2),
-                I32LtU,
+                I64Const(2),
+                I64LtU,
                 If(elements::BlockType::NoResult),
                 Call(0),
                 End,
                 GetGlobal(1),
-                I32Const(2),
-                I32Sub,
+                I64Const(2),
+                I64Sub,
                 SetGlobal(1),
                 GetGlobal(0),
                 Call(2),
@@ -611,17 +611,17 @@ mod tests {
                 GetLocal(0),
                 GetGlobal(1),
                 GetLocal(0),
-                I32Const(10000),
-                I32Mul,
-                I32LtU,
+                I64Const(10000),
+                I64Mul,
+                I64LtU,
                 If(elements::BlockType::NoResult),
                 Call(0),
                 End,
                 GetGlobal(1),
                 GetLocal(0),
-                I32Const(10000),
-                I32Mul,
-                I32Sub,
+                I64Const(10000),
+                I64Mul,
+                I64Sub,
                 SetGlobal(1),
                 GrowMemory(0),
                 End
@@ -658,14 +658,14 @@ mod tests {
             get_function_body(&injected_module, 0).unwrap(),
             &vec![
                 GetGlobal(1),
-                I32Const(2),
-                I32LtU,
+                I64Const(2),
+                I64LtU,
                 If(elements::BlockType::NoResult),
                 Call(0),
                 End,
                 GetGlobal(1),
-                I32Const(2),
-                I32Sub,
+                I64Const(2),
+                I64Sub,
                 SetGlobal(1),
                 GetGlobal(0),
                 GrowMemory(0),
@@ -717,40 +717,40 @@ mod tests {
             get_function_body(&injected_module, 1).unwrap(),
             &vec![
                 GetGlobal(1),
-                I32Const(3),
-                I32LtU,
+                I64Const(3),
+                I64LtU,
                 If(elements::BlockType::NoResult),
                 Call(0),
                 End,
                 GetGlobal(1),
-                I32Const(3),
-                I32Sub,
+                I64Const(3),
+                I64Sub,
                 SetGlobal(1),
                 Call(1),
                 If(elements::BlockType::NoResult),
                 GetGlobal(1),
-                I32Const(3),
-                I32LtU,
+                I64Const(3),
+                I64LtU,
                 If(elements::BlockType::NoResult),
                 Call(0),
                 End,
                 GetGlobal(1),
-                I32Const(3),
-                I32Sub,
+                I64Const(3),
+                I64Sub,
                 SetGlobal(1),
                 Call(1),
                 Call(1),
                 Call(1),
                 Else,
                 GetGlobal(1),
-                I32Const(2),
-                I32LtU,
+                I64Const(2),
+                I64LtU,
                 If(elements::BlockType::NoResult),
                 Call(0),
                 End,
                 GetGlobal(1),
-                I32Const(2),
-                I32Sub,
+                I64Const(2),
+                I64Sub,
                 SetGlobal(1),
                 Call(1),
                 Call(1),
@@ -829,14 +829,14 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 1
-				i32.lt_u
+				i64.const 1
+				i64.lt_u
 				if
 				  call 0
 				end
 				get_global 0
-				i32.const 1
-				i32.sub
+				i64.const 1
+				i64.sub
 				set_global 0
 				(get_global 0)))
 		"#
@@ -858,14 +858,14 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 6
-				i32.lt_u
+				i64.const 6
+				i64.lt_u
 				if
 				  call 0
 				end
 				get_global 0
-				i32.const 6
-				i32.sub
+				i64.const 6
+				i64.sub
 				set_global 0
 				(get_global 0)
 				(block
@@ -896,41 +896,41 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 3
-				i32.lt_u
+				i64.const 3
+				i64.lt_u
 				if
 				  call 0
 				end
 				get_global 0
-				i32.const 3
-				i32.sub
+				i64.const 3
+				i64.sub
 				set_global 0
 				(get_global 0)
 				(if
 					(then
 						get_global 0
-						i32.const 3
-					    i32.lt_u
+						i64.const 3
+					    i64.lt_u
 				        if
 							call 0
 						end
 						get_global 0
-						i32.const 3
-					  	i32.sub
+						i64.const 3
+					  	i64.sub
 					 	set_global 0
 						(get_global 0)
 						(get_global 0)
 						(get_global 0))
 					(else
 						get_global 0
-						i32.const 2
-						i32.lt_u
+						i64.const 2
+						i64.lt_u
 						if  ;; label = @2
 							call 0
 						end
 						get_global 0
-						i32.const 2
-						i32.sub
+						i64.const 2
+						i64.sub
 						set_global 0
 						(get_global 0)
 						(get_global 0)))
@@ -956,14 +956,14 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 6
-				i32.lt_u
+				i64.const 6
+				i64.lt_u
 				if  ;; label = @1
 				  call 0
 				end
 				get_global 0
-				i32.const 6
-				i32.sub
+				i64.const 6
+				i64.sub
 				set_global 0
 				(get_global 0)
 				(block
@@ -971,14 +971,14 @@ mod tests {
 					(drop)
 					(br 0)
 					get_global 0
-					i32.const 2
-					i32.lt_u
+					i64.const 2
+					i64.lt_u
 					if  ;; label = @2
 					call 0
 					end
 					get_global 0
-					i32.const 2
-					i32.sub
+					i64.const 2
+					i64.sub
 					set_global 0
 					(get_global 0)
 					(drop))
@@ -1008,14 +1008,14 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 5
-				i32.lt_u
+				i64.const 5
+				i64.lt_u
 				if  ;; label = @1
 				  call 0
 				end
 				get_global 0
-				i32.const 5
-				i32.sub
+				i64.const 5
+				i64.sub
 				set_global 0
 				(get_global 0)
 				(block
@@ -1023,28 +1023,28 @@ mod tests {
 					(if
 						(then
 							get_global 0
-							i32.const 4
-							i32.lt_u
+							i64.const 4
+							i64.lt_u
 							if  ;; label = @3
 							  call 0
 							end
 							get_global 0
-							i32.const 4
-							i32.sub
+							i64.const 4
+							i64.sub
 							set_global 0
 							(get_global 0)
 							(get_global 0)
 							(drop)
 							(br_if 1)))
 					get_global 0
-					i32.const 2
-					i32.lt_u
+					i64.const 2
+					i64.lt_u
 					if  ;; label = @2
 					call 0
 					end
 					get_global 0
-					i32.const 2
-					i32.sub
+					i64.const 2
+					i64.sub
 					set_global 0
 					(get_global 0)
 					(drop))
@@ -1077,52 +1077,52 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 3
-				i32.lt_u
+				i64.const 3
+				i64.lt_u
 				if  ;; label = @1
 				  call 0
 				end
 				get_global 0
-				i32.const 3
-				i32.sub
+				i64.const 3
+				i64.sub
 				set_global 0
 				(get_global 0)
 				(loop
 					get_global 0
-					i32.const 4
-					i32.lt_u
+					i64.const 4
+					i64.lt_u
 					if  ;; label = @1
 					  call 0
 					end
 					get_global 0
-					i32.const 4
-					i32.sub
+					i64.const 4
+					i64.sub
 					set_global 0
 					(get_global 0)
 					(if
 						(then
 							get_global 0
-							i32.const 2
-							i32.lt_u
+							i64.const 2
+							i64.lt_u
 							if  ;; label = @3
 							  call 0
 							end
 							get_global 0
-							i32.const 2
-							i32.sub
+							i64.const 2
+							i64.sub
 							set_global 0
 							(get_global 0)
 							(br_if 0))
 						(else
 							get_global 0
-							i32.const 4
-							i32.lt_u
+							i64.const 4
+							i64.lt_u
 							if  ;; label = @3
 							  call 0
 							end
 							get_global 0
-							i32.const 4
-							i32.sub
+							i64.const 4
+							i64.sub
 							set_global 0
 							(get_global 0)
 							(get_global 0)
@@ -1149,38 +1149,38 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 2
-				i32.lt_u
+				i64.const 2
+				i64.lt_u
 				if
 				  call 0
 				end
 				get_global 0
-				i32.const 2
-				i32.sub
+				i64.const 2
+				i64.sub
 				set_global 0
 				(get_global 0)
 				(if
 					(then
 						get_global 0
-						i32.const 1
-						i32.lt_u
+						i64.const 1
+						i64.lt_u
 						if  ;; label = @1
 						  call 0
 						end
 						get_global 0
-						i32.const 1
-						i32.sub
+						i64.const 1
+						i64.sub
 						set_global 0
 						(return)))
 				get_global 0
-				i32.const 1
-				i32.lt_u
+				i64.const 1
+				i64.lt_u
 				if  ;; label = @1
 				  call 0
 				end
 				get_global 0
-				i32.const 1
-				i32.sub
+				i64.const 1
+				i64.sub
 				set_global 0
 				(get_global 0)))
 		"#
@@ -1205,14 +1205,14 @@ mod tests {
 		(module
 			(func (result i32)
 				get_global 0
-				i32.const 5
-				i32.lt_u
+				i64.const 5
+				i64.lt_u
 				if  ;; label = @1
 				  call 0
 				end
 				get_global 0
-				i32.const 5
-				i32.sub
+				i64.const 5
+				i64.sub
 				set_global 0
 				(get_global 0)
 				(block
@@ -1220,37 +1220,37 @@ mod tests {
 					(if
 						(then
 							get_global 0
-							i32.const 1
-							i32.lt_u
+							i64.const 1
+							i64.lt_u
 							if  ;; label = @3
 							  call 0
 							end
 							get_global 0
-							i32.const 1
-							i32.sub
+							i64.const 1
+							i64.sub
 							set_global 0
 							(br 1))
 						(else
 							get_global 0
-							i32.const 1
-							i32.lt_u
+							i64.const 1
+							i64.lt_u
 							if  ;; label = @3
 							  call 0
 							end
 							get_global 0
-							i32.const 1
-							i32.sub
+							i64.const 1
+							i64.sub
 							set_global 0
 							(br 0)))
 					get_global 0
-					i32.const 2
-					i32.lt_u
+					i64.const 2
+					i64.lt_u
 					if  ;; label = @2
 					call 0
 					end
 					get_global 0
-					i32.const 2
-					i32.sub
+					i64.const 2
+					i64.sub
 					set_global 0
 					(get_global 0)
 					(drop))
