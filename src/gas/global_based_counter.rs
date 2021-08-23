@@ -423,7 +423,7 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
     );
     mbuilder.push_export(
         builder::export()
-            .field("remaining_gas")
+            .field("remaining_ops")
             .with_internal(Internal::Global(gas_global))
             .build()
     );

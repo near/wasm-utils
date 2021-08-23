@@ -43,4 +43,4 @@
       i32.popcnt
     end)
   (global (;0;) (mut i64) (i64.const 0))
-  (export "remaining_gas" (global 0)))
+  (export "remaining_ops" (global 0)))

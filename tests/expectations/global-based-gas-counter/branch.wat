@@ -44,4 +44,4 @@
     end
     local.get 1)
   (global (;0;) (mut i64) (i64.const 0))
-  (export "remaining_gas" (global 0)))
+  (export "remaining_ops" (global 0)))
