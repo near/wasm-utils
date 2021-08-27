@@ -1,11 +1,13 @@
 (module
   (type (;0;) (func))
-  (import "env" "out_of_gas_callback" (func (;0;) (type 0)))
+  (type (;1;) (func (param i64)))
+  (import "env" "out_of_gas_callback" (func (;0;) (type 1)))
   (func (;1;) (type 0)
     global.get 0
     i64.const 2
     i64.lt_u
     if  ;; label = @1
+      i64.const 2
       call 0
     end
     global.get 0
@@ -18,6 +20,7 @@
       i64.const 1
       i64.lt_u
       if  ;; label = @2
+        i64.const 1
         call 0
       end
       global.get 0
@@ -29,6 +32,7 @@
         i64.const 2
         i64.lt_u
         if  ;; label = @3
+          i64.const 2
           call 0
         end
         global.get 0
@@ -44,6 +48,7 @@
     i64.const 1
     i64.lt_u
     if  ;; label = @1
+      i64.const 1
       call 0
     end
     global.get 0

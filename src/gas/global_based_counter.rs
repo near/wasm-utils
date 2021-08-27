@@ -334,6 +334,7 @@ fn insert_metering_update(
                     I64Const(block.cost as i64),
                     I64LtU,
                     If(elements::BlockType::NoResult),
+                    I64Const(block.cost as i64),
                     Call(out_of_gas_callback),
                     End,
                     // gas_global -= block.cost
@@ -365,8 +366,10 @@ fn insert_metering_update(
 /// imported gas metering function.
 ///
 /// The output module imports a function `out_of_gas_callback` from the module "env" with type
-/// signature [] -> []. The external function is meant to return a customized error when run out
-/// of gas. The output module also injects a global means amount of gas remaining.
+/// signature [i64] -> []. The external function is meant to return a customized error when run out
+/// of gas. And the parameter is the last gas that intended to deduct from the counter. But deduct
+/// doesn't happen because underflow would happen. The output module also injects a global means
+/// amount of gas remaining.
 ///
 /// The body of each function is divided into metered blocks, and the calls to charge gas are
 /// inserted at the beginning of every such block of code. A metered block is defined so that,
@@ -412,6 +415,7 @@ pub fn inject_gas_counter(module: elements::Module, rules: &rules::Set)
     // Injecting host callback when run out of gas
     let import_sig = mbuilder.push_signature(
         builder::signature()
+            .param().i64()
             .build_sig()
     );
     mbuilder.push_import(
@@ -516,6 +520,10 @@ fn add_grow_counter(module: elements::Module, rules: &rules::Set, gas_global: u3
                 I64Mul,
                 I64LtU,
                 If(elements::BlockType::NoResult),
+                GetLocal(0),
+                I64ExtendUI32,
+                I64Const(rules.grow_cost() as i64),
+                I64Mul,
                 Call(out_of_gas_callback),
                 End,
                 // gas_global -= total_grow_cost
@@ -595,6 +603,7 @@ mod tests {
                 I64Const(2),
                 I64LtU,
                 If(elements::BlockType::NoResult),
+                I64Const(2),
                 Call(0),
                 End,
                 GetGlobal(1),
@@ -618,6 +627,10 @@ mod tests {
                 I64Mul,
                 I64LtU,
                 If(elements::BlockType::NoResult),
+                GetLocal(0),
+                I64ExtendUI32,
+                I64Const(10000),
+                I64Mul,
                 Call(0),
                 End,
                 GetGlobal(1),
@@ -665,6 +678,7 @@ mod tests {
                 I64Const(2),
                 I64LtU,
                 If(elements::BlockType::NoResult),
+                I64Const(2),
                 Call(0),
                 End,
                 GetGlobal(1),
@@ -724,6 +738,7 @@ mod tests {
                 I64Const(3),
                 I64LtU,
                 If(elements::BlockType::NoResult),
+                I64Const(3),
                 Call(0),
                 End,
                 GetGlobal(1),
@@ -736,6 +751,7 @@ mod tests {
                 I64Const(3),
                 I64LtU,
                 If(elements::BlockType::NoResult),
+                I64Const(3),
                 Call(0),
                 End,
                 GetGlobal(1),
@@ -750,6 +766,7 @@ mod tests {
                 I64Const(2),
                 I64LtU,
                 If(elements::BlockType::NoResult),
+                I64Const(2),
                 Call(0),
                 End,
                 GetGlobal(1),
@@ -836,6 +853,7 @@ mod tests {
 				i64.const 1
 				i64.lt_u
 				if
+                  i64.const 1
 				  call 0
 				end
 				get_global 0
@@ -865,6 +883,7 @@ mod tests {
 				i64.const 6
 				i64.lt_u
 				if
+				  i64.const 6
 				  call 0
 				end
 				get_global 0
@@ -903,6 +922,7 @@ mod tests {
 				i64.const 3
 				i64.lt_u
 				if
+				  i64.const 3
 				  call 0
 				end
 				get_global 0
@@ -916,6 +936,7 @@ mod tests {
 						i64.const 3
 					    i64.lt_u
 				        if
+                            i64.const 3
 							call 0
 						end
 						get_global 0
@@ -930,6 +951,7 @@ mod tests {
 						i64.const 2
 						i64.lt_u
 						if  ;; label = @2
+						    i64.const 2
 							call 0
 						end
 						get_global 0
@@ -963,6 +985,7 @@ mod tests {
 				i64.const 6
 				i64.lt_u
 				if  ;; label = @1
+                  i64.const 6
 				  call 0
 				end
 				get_global 0
@@ -978,7 +1001,8 @@ mod tests {
 					i64.const 2
 					i64.lt_u
 					if  ;; label = @2
-					call 0
+                      i64.const 2
+					  call 0
 					end
 					get_global 0
 					i64.const 2
@@ -1015,6 +1039,7 @@ mod tests {
 				i64.const 5
 				i64.lt_u
 				if  ;; label = @1
+                  i64.const 5
 				  call 0
 				end
 				get_global 0
@@ -1030,6 +1055,7 @@ mod tests {
 							i64.const 4
 							i64.lt_u
 							if  ;; label = @3
+                              i64.const 4
 							  call 0
 							end
 							get_global 0
@@ -1044,7 +1070,8 @@ mod tests {
 					i64.const 2
 					i64.lt_u
 					if  ;; label = @2
-					call 0
+                      i64.const 2
+					  call 0
 					end
 					get_global 0
 					i64.const 2
@@ -1084,6 +1111,7 @@ mod tests {
 				i64.const 3
 				i64.lt_u
 				if  ;; label = @1
+                  i64.const 3
 				  call 0
 				end
 				get_global 0
@@ -1096,6 +1124,7 @@ mod tests {
 					i64.const 4
 					i64.lt_u
 					if  ;; label = @1
+					  i64.const 4
 					  call 0
 					end
 					get_global 0
@@ -1109,6 +1138,7 @@ mod tests {
 							i64.const 2
 							i64.lt_u
 							if  ;; label = @3
+							  i64.const 2
 							  call 0
 							end
 							get_global 0
@@ -1122,6 +1152,7 @@ mod tests {
 							i64.const 4
 							i64.lt_u
 							if  ;; label = @3
+							  i64.const 4
 							  call 0
 							end
 							get_global 0
@@ -1156,6 +1187,7 @@ mod tests {
 				i64.const 2
 				i64.lt_u
 				if
+                  i64.const 2
 				  call 0
 				end
 				get_global 0
@@ -1169,6 +1201,7 @@ mod tests {
 						i64.const 1
 						i64.lt_u
 						if  ;; label = @1
+                          i64.const 1
 						  call 0
 						end
 						get_global 0
@@ -1180,6 +1213,7 @@ mod tests {
 				i64.const 1
 				i64.lt_u
 				if  ;; label = @1
+                  i64.const 1
 				  call 0
 				end
 				get_global 0
@@ -1212,6 +1246,7 @@ mod tests {
 				i64.const 5
 				i64.lt_u
 				if  ;; label = @1
+                  i64.const 5
 				  call 0
 				end
 				get_global 0
@@ -1227,6 +1262,7 @@ mod tests {
 							i64.const 1
 							i64.lt_u
 							if  ;; label = @3
+                              i64.const 1
 							  call 0
 							end
 							get_global 0
@@ -1239,6 +1275,7 @@ mod tests {
 							i64.const 1
 							i64.lt_u
 							if  ;; label = @3
+                              i64.const 1
 							  call 0
 							end
 							get_global 0
@@ -1250,7 +1287,8 @@ mod tests {
 					i64.const 2
 					i64.lt_u
 					if  ;; label = @2
-					call 0
+					  i64.const 2
+					  call 0
 					end
 					get_global 0
 					i64.const 2

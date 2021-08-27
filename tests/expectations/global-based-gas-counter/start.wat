@@ -1,14 +1,16 @@
 (module
   (type (;0;) (func (param i32 i32)))
   (type (;1;) (func))
+  (type (;2;) (func (param i64)))
   (import "env" "ext_return" (func (;0;) (type 0)))
   (import "env" "memory" (memory (;0;) 1 1))
-  (import "env" "out_of_gas_callback" (func (;1;) (type 1)))
+  (import "env" "out_of_gas_callback" (func (;1;) (type 2)))
   (func (;2;) (type 1)
     global.get 0
     i64.const 4
     i64.lt_u
     if  ;; label = @1
+      i64.const 4
       call 1
     end
     global.get 0
