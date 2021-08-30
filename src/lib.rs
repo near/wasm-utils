@@ -31,6 +31,7 @@ pub use ext::{
 	externalize, externalize_mem, shrink_unknown_stack, underscore_funcs, ununderscore_funcs,
 };
 pub use gas::inject_gas_counter;
+pub use gas::global_based_counter::{inject_gas_counter as inject_global_gas_counter, set_total_gas};
 pub use optimizer::{optimize, Error as OptimizerError};
 pub use pack::{pack_instance, Error as PackingError};
 pub use runtime_type::inject_runtime_type;

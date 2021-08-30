@@ -123,4 +123,29 @@ mod gas {
 	def_gas_test!(start);
 	def_gas_test!(call);
 	def_gas_test!(branch);
+
+	mod global_based_gas {
+		use super::*;
+
+		macro_rules! def_global_gas_test {
+			( $name:ident ) => {
+				#[test]
+				fn $name() {
+					run_diff_test("global-based-gas-counter", concat!(stringify!($name), ".wat"), |input| {
+						let rules = utils::rules::Set::default();
+
+						let module = elements::deserialize_buffer(input).expect("Failed to deserialize");
+						let instrumented = utils::inject_global_gas_counter(module, &rules).expect("Failed to instrument with gas metering");
+						elements::serialize(instrumented).expect("Failed to serialize")
+					});
+				}
+			};
+		}
+
+		def_global_gas_test!(ifs);
+		def_global_gas_test!(simple);
+		def_global_gas_test!(start);
+		def_global_gas_test!(call);
+		def_global_gas_test!(branch);
+	}
 }
