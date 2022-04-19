@@ -1,8 +1,8 @@
 use crate::std::vec::Vec;
 
-use super::{resolve_func_type, Error};
+use super::{Error, ModuleCtx};
 use log::trace;
-use parity_wasm::elements::{self, BlockType, Type};
+use parity_wasm::elements::{BlockType, Type};
 
 /// Control stack frame.
 #[derive(Debug)]
@@ -134,8 +134,10 @@ impl Stack {
 }
 
 /// This function expects the function to be validated.
-pub(crate) fn compute(func_idx: u32, module: &elements::Module) -> Result<u32, Error> {
+pub(crate) fn compute(func_idx: u32, module_ctx: &ModuleCtx<'_>) -> Result<u32, Error> {
 	use parity_wasm::elements::Instruction::*;
+
+	let module = module_ctx.module;
 
 	let func_section =
 		module.function_section().ok_or_else(|| Error("No function section".into()))?;
@@ -263,7 +265,7 @@ pub(crate) fn compute(func_idx: u32, module: &elements::Module) -> Result<u32, E
 				stack.mark_unreachable()?;
 			},
 			Call(idx) => {
-				let ty = resolve_func_type(*idx, module)?;
+				let ty = module_ctx.resolve_func_type(*idx)?;
 
 				// Pop values for arguments of the function.
 				stack.pop_values(ty.params().len() as u32)?;
@@ -444,7 +446,8 @@ mod tests {
 "#,
 		);
 
-		let height = compute(0, &module).unwrap();
+		let module_ctx = ModuleCtx::new(&module);
+		let height = compute(0, &module_ctx).unwrap();
 		assert_eq!(height, 3);
 	}
 
@@ -461,7 +464,8 @@ mod tests {
 "#,
 		);
 
-		let height = compute(0, &module).unwrap();
+		let module_ctx = ModuleCtx::new(&module);
+		let height = compute(0, &module_ctx).unwrap();
 		assert_eq!(height, 1);
 	}
 
@@ -479,7 +483,8 @@ mod tests {
 "#,
 		);
 
-		let height = compute(0, &module).unwrap();
+		let module_ctx = ModuleCtx::new(&module);
+		let height = compute(0, &module_ctx).unwrap();
 		assert_eq!(height, 0);
 	}
 
@@ -514,7 +519,8 @@ mod tests {
 		)
 		.expect("Failed to deserialize the module");
 
-		let height = compute(0, &module).unwrap();
+		let module_ctx = ModuleCtx::new(&module);
+		let height = compute(0, &module_ctx).unwrap();
 		assert_eq!(height, 2);
 	}
 
@@ -538,7 +544,8 @@ mod tests {
 "#,
 		);
 
-		let height = compute(0, &module).unwrap();
+		let module_ctx = ModuleCtx::new(&module);
+		let height = compute(0, &module_ctx).unwrap();
 		assert_eq!(height, 1);
 	}
 
@@ -560,7 +567,8 @@ mod tests {
 "#,
 		);
 
-		let height = compute(0, &module).unwrap();
+		let module_ctx = ModuleCtx::new(&module);
+		let height = compute(0, &module_ctx).unwrap();
 		assert_eq!(height, 1);
 	}
 
@@ -586,7 +594,8 @@ mod tests {
 "#,
 		);
 
-		let height = compute(0, &module).unwrap();
+		let module_ctx = ModuleCtx::new(&module);
+		let height = compute(0, &module_ctx).unwrap();
 		assert_eq!(height, 3);
 	}
 }

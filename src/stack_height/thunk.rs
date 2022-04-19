@@ -9,7 +9,7 @@ use parity_wasm::{
 	elements::{self, FunctionType, Internal},
 };
 
-use super::{resolve_func_type, Context, Error};
+use super::{Context, Error, ModuleCtx};
 
 struct Thunk {
 	signature: FunctionType,
@@ -22,6 +22,8 @@ pub(crate) fn generate_thunks(
 	ctx: &mut Context,
 	module: elements::Module,
 ) -> Result<elements::Module, Error> {
+	let module_ctx = ModuleCtx::new(&module);
+
 	// First, we need to collect all function indices that should be replaced by thunks
 
 	let mut replacement_map: Map<u32, Thunk> = {
@@ -52,7 +54,7 @@ pub(crate) fn generate_thunks(
 				replacement_map.insert(
 					func_idx,
 					Thunk {
-						signature: resolve_func_type(func_idx, &module)?.clone(),
+						signature: module_ctx.resolve_func_type(func_idx)?.clone(),
 						idx: None,
 						callee_stack_cost,
 					},

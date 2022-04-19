@@ -163,20 +163,59 @@ fn generate_stack_height_global(module: &mut elements::Module) -> u32 {
 	0
 }
 
+pub(crate) struct ModuleCtx<'a> {
+	module: &'a elements::Module,
+	func_imports: usize,
+	func_idx_to_sig_idx: Vec<u32>,
+}
+
+impl<'a> ModuleCtx<'a> {
+	fn new(module: &'a elements::Module) -> Self {
+		let func_imports = module.import_count(elements::ImportCountType::Function);
+		let  func_idx_to_sig_idx: Vec<u32> = {
+			let imported = module.import_section().map(|is| is.entries()).unwrap_or(&[])
+				.iter()
+				.filter_map(|entry| match entry.external() {
+					elements::External::Function(idx) => Some(*idx),
+					_ => None,
+				});
+			let declared = module.function_section().map(|fs| fs.entries()).unwrap_or(&[])
+				.iter()
+				.map(|func| func.type_ref());
+			imported.chain(declared).collect()
+		};
+		Self { module, func_imports, func_idx_to_sig_idx }
+	}
+
+	fn resolve_func_type(
+		&self,
+		func_idx: u32,
+	) -> Result<&'a elements::FunctionType, Error> {
+		let types = self.module.type_section().map(|ts| ts.types()).unwrap_or(&[]);
+
+		let sig_idx = *self.func_idx_to_sig_idx.get(func_idx as usize)
+			.ok_or_else(|| Error(format!("Function at index {} is not defined", func_idx)))?;
+		let Type::Function(ty) = types.get(sig_idx as usize).ok_or_else(|| {
+			Error(format!("Signature {} (specified by func {}) isn't defined", sig_idx, func_idx))
+		})?;
+		Ok(ty)
+	}
+}
+
 /// Calculate stack costs for all functions.
 ///
 /// Returns a vector with a stack cost for each function, including imports.
 fn compute_stack_costs(module: &elements::Module) -> Result<Vec<u32>, Error> {
-	let func_imports = module.import_count(elements::ImportCountType::Function);
+	let module_ctx = ModuleCtx::new(module);
 
 	// TODO: optimize!
 	(0..module.functions_space())
 		.map(|func_idx| {
-			if func_idx < func_imports {
+			if func_idx < module_ctx.func_imports {
 				// We can't calculate stack_cost of the import functions.
 				Ok(0)
 			} else {
-				compute_stack_cost(func_idx as u32, module)
+				compute_stack_cost(func_idx as u32, &module_ctx)
 			}
 		})
 		.collect()
@@ -185,15 +224,15 @@ fn compute_stack_costs(module: &elements::Module) -> Result<Vec<u32>, Error> {
 /// Stack cost of the given *defined* function is the sum of it's locals count (that is,
 /// number of arguments plus number of local variables) and the maximal stack
 /// height.
-fn compute_stack_cost(func_idx: u32, module: &elements::Module) -> Result<u32, Error> {
+fn compute_stack_cost(func_idx: u32, module_ctx: &ModuleCtx<'_>) -> Result<u32, Error> {
 	// To calculate the cost of a function we need to convert index from
 	// function index space to defined function spaces.
-	let func_imports = module.import_count(elements::ImportCountType::Function) as u32;
 	let defined_func_idx = func_idx
-		.checked_sub(func_imports)
+		.checked_sub(module_ctx.func_imports as u32)
 		.ok_or_else(|| Error("This should be a index of a defined function".into()))?;
 
-	let code_section = module
+	let code_section = module_ctx
+		.module
 		.code_section()
 		.ok_or_else(|| Error("Due to validation code section should exists".into()))?;
 	let body = &code_section
@@ -208,7 +247,7 @@ fn compute_stack_cost(func_idx: u32, module: &elements::Module) -> Result<u32, E
 			.ok_or_else(|| Error("Overflow in local count".into()))?;
 	}
 
-	let max_stack_height = max_height::compute(defined_func_idx, module)?;
+	let max_stack_height = max_height::compute(defined_func_idx, module_ctx)?;
 
 	locals_count
 		.checked_add(max_stack_height)
@@ -318,42 +357,6 @@ fn instrument_function(ctx: &mut Context, func: &mut Instructions) -> Result<(),
 	}
 
 	Ok(())
-}
-
-fn resolve_func_type(
-	func_idx: u32,
-	module: &elements::Module,
-) -> Result<&elements::FunctionType, Error> {
-	let types = module.type_section().map(|ts| ts.types()).unwrap_or(&[]);
-	let functions = module.function_section().map(|fs| fs.entries()).unwrap_or(&[]);
-
-	let func_imports = module.import_count(elements::ImportCountType::Function);
-	let sig_idx = if func_idx < func_imports as u32 {
-		module
-			.import_section()
-			.expect("function import count is not zero; import section must exists; qed")
-			.entries()
-			.iter()
-			.filter_map(|entry| match entry.external() {
-				elements::External::Function(idx) => Some(*idx),
-				_ => None,
-			})
-			.nth(func_idx as usize)
-			.expect(
-				"func_idx is less than function imports count;
-				nth function import must be `Some`;
-				qed",
-			)
-	} else {
-		functions
-			.get(func_idx as usize - func_imports)
-			.ok_or_else(|| Error(format!("Function at index {} is not defined", func_idx)))?
-			.type_ref()
-	};
-	let Type::Function(ty) = types.get(sig_idx as usize).ok_or_else(|| {
-		Error(format!("Signature {} (specified by func {}) isn't defined", sig_idx, func_idx))
-	})?;
-	Ok(ty)
 }
 
 #[cfg(test)]
